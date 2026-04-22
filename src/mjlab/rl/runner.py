@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import time
 import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
@@ -20,6 +21,7 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     log_dir: str | None = None,
     device: str = "cpu",
   ) -> None:
+    self.zero_order = train_cfg["algorithm"].pop("zero_order", False)
     # Strip None-valued optional configs so MLPModel doesn't receive them.
     for key in ("actor", "critic"):
       if key in train_cfg:
@@ -30,6 +32,113 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
     super().__init__(env, train_cfg, log_dir, device)
+
+  def learn_zero_order(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
+    # Randomize initial episode lengths (for exploration)
+    if init_at_random_ep_len:
+        self.env.episode_length_buf = torch.randint_like(
+            self.env.episode_length_buf, high=int(self.env.max_episode_length)
+        )
+
+    # Start learning
+    obs = self.env.get_observations().to(self.device)
+    at_least_done_once = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
+    dones_ = torch.zeros(self.env.num_envs, dtype=torch.long, device=self.device)
+    self.alg.train_mode()  # switch to train mode (for dropout for example)
+
+    # Ensure all parameters are in-synced
+    if self.is_distributed:
+        print(f"Synchronizing parameters for rank {self.gpu_global_rank}...")
+        self.alg.broadcast_parameters()
+
+    # Initialize the logging writer
+    self.logger.init_logging_writer()
+    
+    # Start training
+    start_it = self.current_learning_iteration
+    total_it = start_it + num_learning_iterations
+    for it in range(start_it, total_it):
+        start = time.time()
+        # Rollout
+        with torch.no_grad():
+            # Rollout for num_steps_per_env.
+            # Stop rollout if all envs has been terminated once.
+            obs = self.env.reset()[0].to(self.device)
+            for i in range(self.cfg["num_steps_per_env"]):
+                # Sample actions
+                actions = self.alg.act(obs)
+                # Step the environment
+                obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
+                # Move to device
+                obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+                # Process the step
+                if i == self.cfg["num_steps_per_env"] - 1:
+                    # Terminate if num_steps_per_env is reached
+                    dones = (~at_least_done_once).long()
+                    # self.alg.process_env_step(obs, rewards, (~at_least_done_once).long(), extras)
+
+                self.alg.process_env_step(obs, rewards, dones, extras)
+                    
+                # Extract intrinsic rewards if RND is used (only for logging)
+                intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None
+                # Book keeping, only for the first episode done
+                dones_ = dones.bool() & ~at_least_done_once
+                self.logger.process_env_step(rewards, dones_, extras, intrinsic_rewards)
+                if i > 0:
+                    at_least_done_once = at_least_done_once | dones.bool()
+                    if at_least_done_once.all():
+                        at_least_done_once.fill_(False)
+                        break
+
+            stop = time.time()
+            collect_time = stop - start
+            start = stop
+
+            # Compute returns
+            self.alg.compute_returns(obs)
+
+        # Update policy
+        loss_dict = self.alg.update()
+
+        stop = time.time()
+        learn_time = stop - start
+        self.current_learning_iteration = it
+
+        # Log information
+        policy = self.alg.get_policy()
+        self.logger.log(
+            it=it,
+            start_it=start_it,
+            total_it=total_it,
+            collect_time=collect_time,
+            learn_time=learn_time,
+            loss_dict=loss_dict,
+            learning_rate=self.alg.learning_rate,
+            action_std=policy.output_std if policy.distribution is not None else torch.zeros(1),
+            rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,  # type: ignore
+        )
+
+        # Reset env steps count
+        dones_.fill_(True)
+        self.logger.process_env_step(rewards, dones_, extras, intrinsic_rewards) # type: ignore
+        # Reset buffers
+        self.logger.rewbuffer.clear()
+        self.logger.lenbuffer.clear()
+
+        # Save model
+        if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
+            self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
+
+    # Save the final model after training and stop the logging writer
+    if self.logger.writer is not None:
+        self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))  # type: ignore
+        self.logger.stop_logging_writer()
+
+  def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
+    if self.zero_order:
+      self.learn_zero_order(num_learning_iterations, init_at_random_ep_len)
+    else:
+      super().learn(num_learning_iterations, init_at_random_ep_len)
 
   def export_policy_to_onnx(
     self, path: str, filename: str = "policy.onnx", verbose: bool = False

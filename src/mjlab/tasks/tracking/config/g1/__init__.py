@@ -2,7 +2,10 @@ from mjlab.tasks.registry import register_mjlab_task
 from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 
 from .env_cfgs import unitree_g1_flat_tracking_env_cfg
-from .rl_cfg import unitree_g1_tracking_ppo_runner_cfg
+from .rl_cfg import (
+    unitree_g1_tracking_ppo_runner_cfg,
+    unitree_g1_tracking_zopo_runner_cfg
+)
 
 register_mjlab_task(
   task_id="Mjlab-Tracking-Flat-Unitree-G1",
@@ -17,5 +20,22 @@ register_mjlab_task(
   env_cfg=unitree_g1_flat_tracking_env_cfg(has_state_estimation=False),
   play_env_cfg=unitree_g1_flat_tracking_env_cfg(has_state_estimation=False, play=True),
   rl_cfg=unitree_g1_tracking_ppo_runner_cfg(),
+  runner_cls=MotionTrackingOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id="Mjlab-Tracking-Flat-Zopo-Unitree-G1",
+  env_cfg=unitree_g1_flat_tracking_env_cfg(
+    with_critic=False,
+    randomize=False,
+    residual_action=True,
+  ),
+  play_env_cfg=unitree_g1_flat_tracking_env_cfg(
+    with_critic=False,
+    randomize=False,
+    residual_action=True,
+    play=True
+  ),
+  rl_cfg=unitree_g1_tracking_zopo_runner_cfg(),
   runner_cls=MotionTrackingOnPolicyRunner,
 )

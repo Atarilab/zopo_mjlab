@@ -9,11 +9,46 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
+from mjlab.tasks.tracking import mdp
 from mjlab.tasks.tracking.tracking_env_cfg import make_tracking_env_cfg
+from mjlab.tasks.tracking.mdp.actions import MotionTrackingJointPositionActionCfg
 
+def no_randomization(cfg: ManagerBasedRlEnvCfg) -> None:
+  """Remove randomization config terms inplace."""
+  cfg.observations["actor"].enable_corruption = False
+  cfg.events = {}
+  motion_cmd : MotionCommandCfg = cfg.commands["motion"] # type: ignore
+  motion_cmd.pose_range={}
+  motion_cmd.joint_position_range=(0., 0.)
+  motion_cmd.velocity_range={}
+
+def improved_rewards(cfg: ManagerBasedRlEnvCfg) -> None:
+  """Modify reward terms inplace."""
+  cfg.rewards["self_collisions"].weight = -1.0
+  cfg.rewards["motion_global_root_pos"].weight = 4.0
+  
+def use_residual_pd_targets(cfg: ManagerBasedRlEnvCfg) -> None:
+  cfg.actions["joint_pos"] = MotionTrackingJointPositionActionCfg(
+    entity_name="robot",
+    actuator_names=(".*",),
+    scale=G1_ACTION_SCALE,
+    command_name="motion",
+  )
+
+def no_critic(cfg: ManagerBasedRlEnvCfg) -> None:
+  cfg.observations.pop("critic")
+
+def relaxed_termination(cfg: ManagerBasedRlEnvCfg) -> None:
+  cfg.terminations["anchor_ori"].params["threshold"] = 0.8
+  cfg.terminations["anchor_pos"].params["threshold"] = 0.4
+  cfg.terminations["ee_body_pos"].func = mdp.bad_motion_body_pos
+  cfg.terminations["ee_body_pos"].params["threshold"] = 0.4
 
 def unitree_g1_flat_tracking_env_cfg(
   has_state_estimation: bool = True,
+  with_critic: bool = True,
+  randomize: bool = True,
+  residual_action: bool = True,
   play: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   """Create Unitree G1 flat terrain tracking configuration."""
@@ -96,5 +131,17 @@ def unitree_g1_flat_tracking_env_cfg(
     motion_cmd.velocity_range = {}
 
     motion_cmd.sampling_mode = "start"
+
+  improved_rewards(cfg)
+  relaxed_termination(cfg)
+
+  if not randomize:
+    no_randomization(cfg)
+
+  if not with_critic:
+    no_critic(cfg)
+
+  if residual_action:
+    use_residual_pd_targets(cfg)
 
   return cfg

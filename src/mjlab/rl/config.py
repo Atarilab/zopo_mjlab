@@ -37,6 +37,32 @@ class RslRlModelCfg:
   class_name: str = "MLPModel"
   """Model class name resolved by RSL-RL (MLPModel, CNNModel, or RNNModel)."""
 
+@dataclass
+class ZOPOAlgorithmCfg():
+    gamma: float = 0.99
+    """Discount factor"""    
+    sigma: float = 0.1
+    """Variance of sampling distribution"""    
+    learning_rate: float = 0.005
+    """Learning rate"""    
+    max_grad_norm: float = 0.0
+    """Max gradient norm for clipping. No clipping if 0."""    
+    antithetic: bool = True
+    """Antithetic sampling (+eps, -eps)"""
+    optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adamw"
+    """The optimizer to use."""
+    weight_decay: float = 0.01
+    """Weight decay for the optimizer."""
+    normalize_returns: bool = True
+    """Normalize returns (devide by std)."""
+    class_name: str = "alg.zopo.ZOPO"
+    """Algorithm class name resolved by RSL-RL."""
+    last_activation: str | None = "tanh"
+    """Last NN activate."""
+    rnd_cfg: dict | None = None
+    """For retro compatibility"""
+    zero_order: bool = True
+    """Use zero_order learn loop in Runner."""
 
 @dataclass
 class RslRlPpoAlgorithmCfg:
