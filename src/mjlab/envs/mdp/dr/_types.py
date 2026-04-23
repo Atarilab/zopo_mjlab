@@ -71,7 +71,7 @@ class Distribution:
   """
 
   name: str
-  sample: Callable[[torch.Tensor, torch.Tensor, tuple[int, ...], str], torch.Tensor]
+  sample: Callable[[torch.Tensor, torch.Tensor, tuple[int, ...], str, bool], torch.Tensor]
 
   def __repr__(self) -> str:
     return f"Distribution({self.name!r})"
@@ -102,15 +102,15 @@ add = Operation(
 
 uniform = Distribution(
   name="uniform",
-  sample=lambda lo, hi, shape, device: sample_uniform(lo, hi, shape, device=device),
+  sample=lambda lo, hi, shape, device, anti: sample_uniform(lo, hi, shape, device=device, antithetic=anti),
 )
 log_uniform = Distribution(
   name="log_uniform",
-  sample=lambda lo, hi, shape, device: sample_log_uniform(lo, hi, shape, device=device),
+  sample=lambda lo, hi, shape, device, anti: sample_log_uniform(lo, hi, shape, device=device, antithetic=anti),
 )
 gaussian = Distribution(
   name="gaussian",
-  sample=lambda lo, hi, shape, device: sample_gaussian(lo, hi, shape, device=device),
+  sample=lambda lo, hi, shape, device, anti: sample_gaussian(lo, hi, shape, device=device, antithetic=anti),
 )
 
 # Resolution helpers.

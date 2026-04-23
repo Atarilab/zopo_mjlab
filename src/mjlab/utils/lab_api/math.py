@@ -1335,7 +1335,7 @@ def random_yaw_orientation(num: int, device: str) -> torch.Tensor:
     return quat_from_euler_xyz(roll, pitch, yaw)
 
 
-def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], device: str) -> torch.Tensor:
+def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], device: str, antithetic: bool = False) -> torch.Tensor:
     """Randomly samples tensor from a triangular distribution.
 
     Args:
@@ -1350,6 +1350,15 @@ def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], dev
     # convert to tuple
     if isinstance(size, int):
         size = (size,)
+    # return tensor
+    if antithetic and size[0] % 2 == 0:
+        N_half = size[0] // 2
+        half_size = (N_half, *size[1:])
+        rand = torch.zeros(*size, device=device)
+        rand[:N_half, ...] = sample_triangle(lower, upper, half_size, device, antithetic=False)
+        rand[N_half:, ...] = rand[:N_half, ...] 
+        return rand
+    
     # create random tensor in the range [-1, 1]
     r = 2 * torch.rand(*size, device=device) - 1
     # convert to triangular distribution
@@ -1361,7 +1370,7 @@ def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], dev
 
 
 def sample_uniform(
-    lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str
+    lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str, antithetic: bool = False,
 ) -> torch.Tensor:
     """Sample uniformly within a range.
 
@@ -1378,11 +1387,19 @@ def sample_uniform(
     if isinstance(size, int):
         size = (size,)
     # return tensor
+    if antithetic and size[0] % 2 == 0:
+        N_half = size[0] // 2
+        half_size = (N_half, *size[1:])
+        rand = torch.zeros(*size, device=device)
+        rand[:N_half, ...] = sample_uniform(lower, upper, half_size, device, antithetic=False)
+        rand[N_half:, ...] = rand[:N_half, ...] 
+        return rand
+
     return torch.rand(*size, device=device) * (upper - lower) + lower
 
 
 def sample_log_uniform(
-    lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str
+    lower: torch.Tensor | float, upper: torch.Tensor | float, size: int | tuple[int, ...], device: str, antithetic: bool = False
 ) -> torch.Tensor:
     r"""Sample using log-uniform distribution within a range.
 
@@ -1409,11 +1426,11 @@ def sample_log_uniform(
     if not isinstance(upper, torch.Tensor):
         upper = torch.tensor(upper, dtype=torch.float, device=device)
     # sample in log-space and exponentiate
-    return torch.exp(sample_uniform(torch.log(lower), torch.log(upper), size, device))
+    return torch.exp(sample_uniform(torch.log(lower), torch.log(upper), size, device, antithetic))
 
 
 def sample_gaussian(
-    mean: torch.Tensor | float, std: torch.Tensor | float, size: int | tuple[int, ...], device: str
+    mean: torch.Tensor | float, std: torch.Tensor | float, size: int | tuple[int, ...], device: str, antithetic: bool = False,
 ) -> torch.Tensor:
     """Sample using gaussian distribution.
 
@@ -1429,6 +1446,16 @@ def sample_gaussian(
     if isinstance(mean, float):
         if isinstance(size, int):
             size = (size,)
+        
+        # return tensor
+        if antithetic and size[0] % 2 == 0:
+            N_half = size[0] // 2
+            half_size = (N_half, *size[1:])
+            rand = torch.zeros(*size, device=device)
+            rand[:N_half, ...] = sample_gaussian(mean, std, half_size, device, antithetic=False)
+            rand[N_half:, ...] = rand[:N_half, ...] 
+            return rand
+
         return torch.normal(mean=mean, std=std, size=size).to(device=device)
     else:
         return torch.normal(mean=mean, std=std).to(device=device)

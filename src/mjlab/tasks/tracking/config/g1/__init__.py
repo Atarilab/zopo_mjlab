@@ -27,7 +27,8 @@ register_mjlab_task(
   task_id="Mjlab-Tracking-Flat-Zopo-Unitree-G1",
   env_cfg=unitree_g1_flat_tracking_env_cfg(
     with_critic=False,
-    randomize=False,
+    randomize=True,
+    antithetic_domain_rand=True,
     residual_action=True,
   ),
   play_env_cfg=unitree_g1_flat_tracking_env_cfg(

@@ -276,7 +276,7 @@ class MotionCommand(CommandTerm):
       sampling_probabilities, len(env_ids), replacement=True
     )
     self.time_steps[env_ids] = (
-      (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
+      (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device, antithetic=self.cfg.antithetic))
       / self.bin_count
       * (self.motion.time_step_total - 1)
     ).long()
@@ -336,7 +336,7 @@ class MotionCommand(CommandTerm):
     ]
     ranges = torch.tensor(range_list, device=self.device)
     rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
+      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device, antithetic=self.cfg.antithetic
     )
     root_pos += rand_samples[:, 0:3]
     orientations_delta = quat_from_euler_xyz(
@@ -349,7 +349,7 @@ class MotionCommand(CommandTerm):
     ]
     ranges = torch.tensor(range_list, device=self.device)
     rand_samples = sample_uniform(
-      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device
+      ranges[:, 0], ranges[:, 1], (len(env_ids), 6), device=self.device, antithetic=self.cfg.antithetic
     )
     root_lin_vel += rand_samples[:, :3]
     root_ang_vel += rand_samples[:, 3:]
@@ -362,6 +362,7 @@ class MotionCommand(CommandTerm):
       upper=self.cfg.joint_position_range[1],
       size=joint_pos.shape,
       device=joint_pos.device,  # type: ignore
+      antithetic=self.cfg.antithetic
     )
 
     self._write_reference_state_to_sim(
@@ -592,6 +593,7 @@ class MotionCommandCfg(CommandTermCfg):
   adaptive_uniform_ratio: float = 0.1
   adaptive_alpha: float = 0.001
   sampling_mode: Literal["adaptive", "uniform", "start"] = "adaptive"
+  antithetic: bool = False
 
   @dataclass
   class VizCfg:

@@ -60,6 +60,7 @@ def _randomize_model_field(
   default_axes: list[int] | None = None,
   valid_axes: list[int] | None = None,
   use_address: bool = False,
+  antithetic: bool = False,
 ) -> None:
   """Core randomization engine for model fields."""
   operation = resolve_operation(operation)
@@ -81,6 +82,7 @@ def _randomize_model_field(
       default_axes=default_axes,
       valid_axes=valid_axes,
       use_address=use_address,
+      antithetic=antithetic,
     )
     return
 
@@ -122,6 +124,7 @@ def _randomize_model_field(
       target_axes,
       env.device,
       operation,
+      antithetic,
     )
     random_values = random_values.expand_as(base_values)
   else:
@@ -132,6 +135,7 @@ def _randomize_model_field(
       target_axes,
       env.device,
       operation,
+      antithetic,
     )
 
   model_field[env_grid, entity_grid] = operation.combine(base_values, random_values)
@@ -152,6 +156,7 @@ def _randomize_with_string_ranges(
   default_axes: list[int] | None,
   valid_axes: list[int] | None,
   use_address: bool,
+  antithetic: bool,
 ) -> None:
   """Resolve string-keyed ranges to entity names and recurse."""
   asset: Entity = env.scene[asset_cfg.name]
@@ -182,6 +187,7 @@ def _randomize_with_string_ranges(
       default_axes=default_axes,
       valid_axes=valid_axes,
       use_address=use_address,
+      antithetic=antithetic,
     )
 
 
@@ -277,6 +283,7 @@ def _generate_random_values(
   target_axes: list[int],
   device: str,
   operation: Operation,
+  antithetic: bool,
 ) -> torch.Tensor:
   """Generate random values for the specified axes."""
   result = operation.initialize(indexed_data)
@@ -291,7 +298,7 @@ def _generate_random_values(
     else:
       shape = indexed_data.shape
 
-    random_vals = distribution.sample(lower_bound, upper_bound, shape, device)
+    random_vals = distribution.sample(lower_bound, upper_bound, shape, device, antithetic)
 
     if len(indexed_data.shape) > 2:
       result[..., axis] = random_vals.squeeze(-1)
@@ -309,11 +316,12 @@ def _sample_angle(
   range_: tuple[float, float],
   shape: tuple[int, ...],
   device: str,
+  antithetic: bool = False,
 ) -> torch.Tensor:
   dist = resolve_distribution(distribution)
   lower = torch.tensor(range_[0], device=device)
   upper = torch.tensor(range_[1], device=device)
-  return dist.sample(lower, upper, shape, device)
+  return dist.sample(lower, upper, shape, device, antithetic)
 
 
 def _randomize_quat_field(

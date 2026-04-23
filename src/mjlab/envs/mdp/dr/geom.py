@@ -123,6 +123,7 @@ def geom_friction(
   operation: Operation | str = "abs",
   axes: list[int] | None = None,
   shared_random: bool = False,
+  antithetic: bool = False,
 ) -> None:
   """Randomize geom friction.
 
@@ -143,6 +144,7 @@ def geom_friction(
     shared_random=shared_random,
     default_axes=[0],
     valid_axes=[0, 1, 2],
+    antithetic=False,
   )
 
 

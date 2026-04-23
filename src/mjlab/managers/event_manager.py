@@ -12,6 +12,7 @@ import torch
 from prettytable import PrettyTable
 
 from mjlab.managers.manager_base import ManagerBase, ManagerTermBaseCfg
+from mjlab.utils.lab_api.math import sample_uniform
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
@@ -139,6 +140,9 @@ class EventTermCfg(ManagerTermBaseCfg):
   too frequently when episodes reset rapidly. Only applies to ``mode="reset"``.
   Set to 0 (default) to trigger on every reset."""
 
+  antithetic: bool = False
+  """Use same randomization for the first and second half of the environments."""
+
 
 class EventManager(ManagerBase):
   """Manages event-based operations for the environment.
@@ -226,9 +230,7 @@ class EventManager(ManagerBase):
         if not term_cfg.is_global_time:
           assert term_cfg.interval_range_s is not None
           lower, upper = term_cfg.interval_range_s
-          sampled_interval = (
-            torch.rand(num_envs, device=self.device) * (upper - lower) + lower
-          )
+          sampled_interval = sample_uniform(lower, upper, num_envs, self.device, term_cfg.antithetic)
           self._interval_term_time_left[index][env_ids] = sampled_interval
     return {}
 
@@ -365,9 +367,7 @@ class EventManager(ManagerBase):
           self._interval_term_time_left.append(time_left)
         else:
           lower, upper = term_cfg.interval_range_s
-          time_left = (
-            torch.rand(self.num_envs, device=self.device) * (upper - lower) + lower
-          )
+          time_left = sample_uniform(lower, upper, self.num_envs, self.device, term_cfg.antithetic)
           self._interval_term_time_left.append(time_left)
       elif term_cfg.mode == "reset":
         step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.int32)

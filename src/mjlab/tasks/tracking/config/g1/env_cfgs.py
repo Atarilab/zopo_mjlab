@@ -44,11 +44,19 @@ def relaxed_termination(cfg: ManagerBasedRlEnvCfg) -> None:
   cfg.terminations["ee_body_pos"].func = mdp.bad_motion_body_pos
   cfg.terminations["ee_body_pos"].params["threshold"] = 0.4
 
+def make_domain_rand_antithetic(cfg: ManagerBasedRlEnvCfg) -> None:
+  for event_name in cfg.events.keys():
+    cfg.events[event_name].params["antithetic"] = True
+    cfg.events[event_name].antithetic = True
+  motion_command : MotionCommandCfg = cfg.commands["motion"] # type: ignore
+  motion_command.antithetic = True
+
 def unitree_g1_flat_tracking_env_cfg(
   has_state_estimation: bool = True,
   with_critic: bool = True,
   randomize: bool = True,
   residual_action: bool = True,
+  antithetic_domain_rand: bool = False,
   play: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   """Create Unitree G1 flat terrain tracking configuration."""
@@ -134,6 +142,9 @@ def unitree_g1_flat_tracking_env_cfg(
 
   improved_rewards(cfg)
   relaxed_termination(cfg)
+
+  if antithetic_domain_rand:
+    make_domain_rand_antithetic(cfg)
 
   if not randomize:
     no_randomization(cfg)
