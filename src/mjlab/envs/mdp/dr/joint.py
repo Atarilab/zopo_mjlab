@@ -211,7 +211,7 @@ def encoder_bias(
   env_ids: torch.Tensor | None,
   bias_range: tuple[float, float],
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
-  antithetic: bool = False,
+  paired: bool = False,
 ) -> None:
   """Randomize encoder bias to simulate joint encoder calibration errors."""
   asset: Entity = env.scene[asset_cfg.name]
@@ -234,7 +234,7 @@ def encoder_bias(
     torch.tensor(bias_range[1], device=env.device),
     (len(env_ids), num_joints),
     env.device,
-    antithetic,
+    paired,
   )
 
   if isinstance(joint_ids, slice):

@@ -335,7 +335,7 @@ def body_com_offset(
   operation: Operation | str = "add",
   axes: list[int] | None = None,
   shared_random: bool = False,
-  antithetic: bool = False,
+  paired: bool = False,
 ) -> None:
   """Randomize body COM offset (body_ipos). Triggers ``set_const``."""
   _randomize_model_field(
@@ -350,7 +350,7 @@ def body_com_offset(
     axes=axes,
     shared_random=shared_random,
     default_axes=[0, 1, 2],
-    antithetic=antithetic,
+    paired=paired,
   )
 
 

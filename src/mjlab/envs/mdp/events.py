@@ -322,7 +322,7 @@ def push_by_setting_velocity(
   env: ManagerBasedRlEnv,
   env_ids: torch.Tensor,
   velocity_range: dict[str, tuple[float, float]],
-  antithetic: bool = False,
+  paired: bool = False,
   asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
   asset: Entity = env.scene[asset_cfg.name]
@@ -332,7 +332,7 @@ def push_by_setting_velocity(
     for key in ["x", "y", "z", "roll", "pitch", "yaw"]
   ]
   ranges = torch.tensor(range_list, device=env.device)
-  vel_w += sample_uniform(ranges[:, 0], ranges[:, 1], vel_w.shape, device=env.device, antithetic=antithetic)
+  vel_w += sample_uniform(ranges[:, 0], ranges[:, 1], vel_w.shape, device=env.device, paired=paired)
   asset.write_root_link_velocity_to_sim(vel_w, env_ids=env_ids)
 
 

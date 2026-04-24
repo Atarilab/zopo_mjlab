@@ -102,15 +102,15 @@ add = Operation(
 
 uniform = Distribution(
   name="uniform",
-  sample=lambda lo, hi, shape, device, anti: sample_uniform(lo, hi, shape, device=device, antithetic=anti),
+  sample=lambda lo, hi, shape, device, anti: sample_uniform(lo, hi, shape, device=device, paired=anti),
 )
 log_uniform = Distribution(
   name="log_uniform",
-  sample=lambda lo, hi, shape, device, anti: sample_log_uniform(lo, hi, shape, device=device, antithetic=anti),
+  sample=lambda lo, hi, shape, device, anti: sample_log_uniform(lo, hi, shape, device=device, paired=anti),
 )
 gaussian = Distribution(
   name="gaussian",
-  sample=lambda lo, hi, shape, device, anti: sample_gaussian(lo, hi, shape, device=device, antithetic=anti),
+  sample=lambda lo, hi, shape, device, anti: sample_gaussian(lo, hi, shape, device=device, paired=anti),
 )
 
 # Resolution helpers.
