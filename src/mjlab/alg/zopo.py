@@ -25,7 +25,7 @@ class ZOPO():
         actor: MLPModel,
         storage: Storage,
         gamma: float = 0.99,
-        sigma: float = 0.1,
+        sigma: float = 0.01,
         learning_rate: float = 0.001,
         max_grad_norm: float = 1.0,
         antithetic: bool = True,
@@ -58,7 +58,6 @@ class ZOPO():
         self.max_grad_norm = max_grad_norm
         self.learning_rate = learning_rate
         self.sigma = sigma
-        self.sigma_sq = sigma ** 2
         if self.N % 2 == 0:
             self.antithetic = antithetic
             self.N_half = self.N // 2
@@ -188,9 +187,9 @@ class ZOPO():
         for k, p in self.actor.mlp.named_parameters():
             # in-place param update
             if not self.antithetic:
-                self.params_samples[k].normal_(std=self.sigma_sq).add_(p)
+                self.params_samples[k].normal_(std=self.sigma).add_(p)
             else:
-                self.params_samples[k][:self.N_half].normal_(std=self.sigma_sq)
+                self.params_samples[k][:self.N_half].normal_(std=self.sigma)
                 self.params_samples[k][self.N_half:].copy_(-self.params_samples[k][:self.N_half])
                 self.params_samples[k].add_(p)
 
@@ -202,7 +201,7 @@ class ZOPO():
             # Subtract p to recover epsilon
             self.params_samples[k].sub_(p.unsqueeze(0))
             r = returns.view(-1, *([1] * p.ndim))
-            p.grad = torch.mean(r * self.params_samples[k], dim=0) / self.sigma_sq
+            p.grad = torch.mean(r * self.params_samples[k], dim=0) / self.sigma
             l2_sq_params += p.square().sum().item()
             total_elems += p.grad.numel()
         

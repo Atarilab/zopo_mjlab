@@ -65,8 +65,8 @@ def unitree_g1_tracking_zopo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     obs_groups= {"actor": ("actor",)},
     algorithm=ZOPOAlgorithmCfg(
       gamma=0.99,
-      sigma=0.1,
-      learning_rate=0.005,
+      sigma=0.01,
+      learning_rate=0.003,
       max_grad_norm=0.0,
       weight_decay=0.01,
       normalize_returns=True,
