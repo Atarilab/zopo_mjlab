@@ -44,12 +44,23 @@ def relaxed_termination(cfg: ManagerBasedRlEnvCfg) -> None:
   cfg.terminations["ee_body_pos"].func = mdp.bad_motion_body_pos
   cfg.terminations["ee_body_pos"].params["threshold"] = 0.4
 
+def no_termination(cfg: ManagerBasedRlEnvCfg) -> None:
+  cfg.terminations.pop("anchor_ori")
+  cfg.terminations.pop("anchor_pos")
+  cfg.terminations.pop("ee_body_pos")
+
 def make_domain_rand_paired(cfg: ManagerBasedRlEnvCfg) -> None:
   for event_name in cfg.events.keys():
     cfg.events[event_name].params["paired"] = True
     cfg.events[event_name].paired = True
   motion_command : MotionCommandCfg = cfg.commands["motion"] # type: ignore
   motion_command.paired = True
+
+  if cfg.observations["actor"].enable_corruption:
+    terms = cfg.observations["actor"].terms
+    for obs_name in terms.keys():
+      if not terms[obs_name].noise is None:
+        terms[obs_name].noise.paired = True # type: ignore
 
 def unitree_g1_flat_tracking_env_cfg(
   has_state_estimation: bool = True,
@@ -140,9 +151,10 @@ def unitree_g1_flat_tracking_env_cfg(
 
     motion_cmd.sampling_mode = "start"
 
+  cfg.scene.env_spacing = 0.
   improved_rewards(cfg)
   relaxed_termination(cfg)
-
+  # no_termination(cfg)
   if paired_domain_rand:
     make_domain_rand_paired(cfg)
 

@@ -271,10 +271,20 @@ class MotionCommand(CommandTerm):
     ).view(-1)
 
     sampling_probabilities = sampling_probabilities / sampling_probabilities.sum()
+    
+    N = len(env_ids)
+    if self.cfg.paired and N % 2 == 0:
+      N_half = N // 2
+      sampled_bins_half = torch.multinomial(
+          sampling_probabilities, N_half, replacement=True
+      )
+      # Repeat for pairing
+      sampled_bins = torch.cat([sampled_bins_half, sampled_bins_half], dim=0)
 
-    sampled_bins = torch.multinomial(
-      sampling_probabilities, len(env_ids), replacement=True
-    )
+    else:
+      sampled_bins = torch.multinomial(
+        sampling_probabilities, len(env_ids), replacement=True
+      )
     self.time_steps[env_ids] = (
       (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device, paired=self.cfg.paired))
       / self.bin_count
@@ -290,9 +300,25 @@ class MotionCommand(CommandTerm):
     self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
 
   def _uniform_sampling(self, env_ids: torch.Tensor):
-    self.time_steps[env_ids] = torch.randint(
-      0, self.motion.time_step_total, (len(env_ids),), device=self.device
-    )
+    N = len(env_ids)
+    if self.cfg.paired and N % 2 == 0:
+        N_half = N // 2
+
+        # Sample only half
+        vals = torch.randint(
+            0,
+            self.motion.time_step_total,
+            (N_half,),
+            device=self.device
+        )
+
+        # Assign paired values
+        self.time_steps[env_ids[:N_half]] = vals
+        self.time_steps[env_ids[N_half:]] = vals
+    else:
+      self.time_steps[env_ids] = torch.randint(
+        0, self.motion.time_step_total, (len(env_ids),), device=self.device
+      )
     self.metrics["sampling_entropy"][:] = 1.0  # Maximum entropy for uniform.
     self.metrics["sampling_top1_prob"][:] = 1.0 / self.bin_count
     self.metrics["sampling_top1_bin"][:] = 0.5  # No specific bin preference.
