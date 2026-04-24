@@ -8,6 +8,7 @@ import torch
 from typing_extensions import override
 
 from mjlab.utils.noise import noise_model
+from mjlab.utils.lab_api.math import sample_uniform, sample_gaussian
 
 # Type alias for noise parameters: scalar or per-dimension values.
 NoiseParam = float | tuple[float, ...]
@@ -23,6 +24,9 @@ class NoiseCfg(abc.ABC):
   _tensor_cache: dict[str, dict[str, torch.Tensor]] = field(
     default_factory=dict, init=False, repr=False
   )
+  
+  # Paired random noise
+  paired: bool = False
 
   def _get_cached_tensor(
     self, name: str, value: NoiseParam, device: torch.device
@@ -74,7 +78,9 @@ class UniformNoiseCfg(NoiseCfg):
     n_max = self._get_cached_tensor("n_max", self.n_max, data.device)
 
     # Generate uniform noise in [0, 1) and scale to [n_min, n_max).
-    noise = torch.rand_like(data) * (n_max - n_min) + n_min
+    size = tuple(data.shape)
+    device = data.device.type
+    noise = sample_uniform(n_min, n_max, size, device, paired=self.paired)
 
     if self.operation == "add":
       return data + noise
@@ -101,7 +107,9 @@ class GaussianNoiseCfg(NoiseCfg):
     std = self._get_cached_tensor("std", self.std, data.device)
 
     # Generate standard normal noise and scale.
-    noise = mean + std * torch.randn_like(data)
+    size = tuple(data.shape)
+    device = data.device.type
+    noise = sample_gaussian(mean, std, size, device, paired=self.paired)
 
     if self.operation == "add":
       return data + noise

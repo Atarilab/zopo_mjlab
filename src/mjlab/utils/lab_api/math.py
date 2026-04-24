@@ -1443,7 +1443,12 @@ def sample_gaussian(
     Returns:
         Sampled tensor.
     """
-    if isinstance(mean, float):
+    if (isinstance(mean, float) or 
+        (
+            isinstance(mean, torch.Tensor) 
+            and mean.size() == 1
+            and std.size() == 1
+        )):
         if isinstance(size, int):
             size = (size,)
         
