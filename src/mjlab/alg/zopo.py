@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 from torch.func import vmap, functional_call
@@ -26,7 +27,9 @@ class ZOPO():
         storage: Storage,
         gamma: float = 0.99,
         sigma: float = 0.01,
-        learning_rate: float = 0.001,
+        lr: float = 1.0e-3,
+        lr_sigma: float | None = 1.0e-4,
+        use_ranks: bool = True,
         max_grad_norm: float = 1.0,
         antithetic: bool = True,
         optimizer: str = "adam",
@@ -56,7 +59,14 @@ class ZOPO():
         # ZOPO parameters
         self.gamma = gamma
         self.max_grad_norm = max_grad_norm
-        self.learning_rate = learning_rate
+        self.learning_rate = lr
+        self.learning_rate_sigma = lr_sigma if lr_sigma is not None else lr
+        if lr_sigma is not None and lr_sigma <= 0.:
+            self.learn_sigma = False
+        else:
+            self.learn_sigma = True
+
+        self.use_ranks = use_ranks
         self.sigma = sigma
         if self.N % 2 == 0:
             self.antithetic = antithetic
@@ -83,16 +93,30 @@ class ZOPO():
         
         self.vmap_actor = torch.compile(vmap(p_forward, in_dims=(0, 0)))
 
-        # Create the optimizer
-        self.optimizer = resolve_optimizer(optimizer)(
-            self.actor.mlp.parameters(), lr=learning_rate, maximize=True, weight_decay=weight_decay,
-        )  # type: ignore
-
         # Init samples
         self.params_samples = {
             k: torch.empty((self.N, *v.shape), device=self.device, dtype=self.dtype)
             for k, v in self.actor.mlp.named_parameters()
         }
+        self._log_sig = {
+            k: f"{k.replace('.', '')}_log_sigma" for k, _ in self.actor.mlp.named_parameters()
+        }
+
+        # Create the optimizer
+        if self.learn_sigma:
+            self.params_log_sigma = torch.nn.ParameterDict({
+                self._log_sig[k]: torch.nn.Parameter(torch.tensor(self.sigma, device=self.device).log())
+                for k, _ in self.actor.mlp.named_parameters()
+            })
+            self.optimizer = resolve_optimizer(optimizer)([
+                {"params": self.actor.mlp.parameters(), "lr": lr, "weight_decay": weight_decay},
+                {"params": self.params_log_sigma.parameters(), "lr": lr_sigma, "weight_decay": 0.0},
+            ], maximize=True) # type: ignore
+        else:
+            self.optimizer : torch.optim.Optimizer = resolve_optimizer(optimizer)(
+                self.actor.mlp.parameters(), lr=lr, maximize=True, weight_decay=weight_decay
+            )  # type: ignore
+
         self.sample_params()
 
     def _init_weights(self) -> None:
@@ -185,11 +209,16 @@ class ZOPO():
 
     def sample_params(self):
         for k, p in self.actor.mlp.named_parameters():
+            if self.learn_sigma:
+                sigma = torch.exp(self.params_log_sigma[self._log_sig[k]]).item()
+            else:
+                sigma = self.sigma
+            
             # in-place param update
             if not self.antithetic:
-                self.params_samples[k].normal_(std=self.sigma).add_(p)
+                self.params_samples[k].normal_(std=sigma).add_(p)
             else:
-                self.params_samples[k][:self.N_half].normal_(std=self.sigma)
+                self.params_samples[k][:self.N_half].normal_(std=sigma)
                 self.params_samples[k][self.N_half:].copy_(-self.params_samples[k][:self.N_half])
                 self.params_samples[k].add_(p)
 
@@ -198,15 +227,29 @@ class ZOPO():
         l2_sq_params = 0.
 
         for k, p in self.actor.mlp.named_parameters():
-            # Subtract p to recover epsilon
+            # Recover epsilon WITHOUT modifying buffer
             self.params_samples[k].sub_(p.unsqueeze(0))
             r = returns.view(-1, *([1] * p.ndim))
-            p.grad = torch.mean(r * self.params_samples[k], dim=0) / self.sigma
+
+            if self.learn_sigma:
+                sigma = torch.exp(self.params_log_sigma[self._log_sig[k]])
+            else:
+                sigma = self.sigma
+            
+            p.grad = torch.mean(r * self.params_samples[k], dim=0) / sigma
+            if self.learn_sigma:
+                # chain rule: d/d logσ = σ * d/dσ
+                # grad = r * sigma * (eps ** 2 - sigma ** 2) / sigma ** 3
+                # grad = r * (eps ** 2 / sigma ** 2 - 1)
+                self.params_samples[k].div_(self.sigma).square_().sub_(1.)
+                self.params_log_sigma[self._log_sig[k]].grad = torch.mean(r * self.params_samples[k])
+
+            # bookkeeping
             l2_sq_params += p.square().sum().item()
             total_elems += p.grad.numel()
-        
-        return l2_sq_params / total_elems
 
+        return l2_sq_params / total_elems
+    
     @torch.no_grad()
     def update(self) -> dict[str, float]:
         # No update if no episode done
@@ -217,10 +260,19 @@ class ZOPO():
         self.optimizer.zero_grad()
 
         # Remove baseline
-        if self.normalize_returns:
-            r = (self.storage.returns - mean_r) / (std_r + 1e-8)
+
+        if self.use_ranks:
+            # Get ranks (0 = worst, N-1 = best)
+            ranks = torch.argsort(torch.argsort(self.storage.returns))
+            # Convert to [0, 1]
+            ranks = ranks.float() / (len(self.storage.returns) - 1)
+            # Center to [-0.5, 0.5]
+            r = ranks - 0.5
         else:
-            r = (self.storage.returns - mean_r)
+            if self.normalize_returns:
+                r = (self.storage.returns - mean_r) / (std_r + 1e-8)
+            else:
+                r = (self.storage.returns - mean_r)
 
         # Compute gradients
         param_norm2 = self.set_grad(r)
@@ -234,6 +286,7 @@ class ZOPO():
                 self.max_grad_norm,
                 total_norm
             )
+
         # torch.nn.utils.clip_grad_norm_(self.actor.mlp.parameters(), self.max_grad_norm)
         # Gradient descene step
         self.optimizer.step()
@@ -249,6 +302,16 @@ class ZOPO():
             "std_r": std_r.item(),
             "dones_frac": dones_frac,
         }
+
+        if self.learn_sigma:
+            for p in self.params_log_sigma.values():
+                p.data.clamp_(-7.0, -3.0)
+            sigma_dict = {
+                f"log_sigma/{k}": v.item()
+                for k, v in self.params_log_sigma.items()
+            }
+            info_dict.update(sigma_dict)
+
         return info_dict
     
     def save(self) -> dict:

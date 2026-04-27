@@ -43,8 +43,14 @@ class ZOPOAlgorithmCfg():
     """Discount factor"""    
     sigma: float = 0.1
     """Variance of sampling distribution"""    
-    learning_rate: float = 0.005
+    lr: float = 0.005
     """Learning rate"""    
+    lr_sigma: float | None = None
+    """Learning rate for the variance of the sampling distrib.
+    Equal lr if set to None.
+    """
+    use_ranks: bool = True
+    """Compute gradient from the ranks of the returns."""
     max_grad_norm: float = 0.0
     """Max gradient norm for clipping. No clipping if 0."""    
     antithetic: bool = True

@@ -66,7 +66,9 @@ def unitree_g1_tracking_zopo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     algorithm=ZOPOAlgorithmCfg(
       gamma=0.99,
       sigma=0.01,
-      learning_rate=0.003,
+      lr=0.003,
+      lr_sigma=0.001,
+      use_ranks=True,
       max_grad_norm=0.0,
       weight_decay=0.01,
       normalize_returns=True,
