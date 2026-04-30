@@ -28,13 +28,10 @@ def improved_rewards(cfg: ManagerBasedRlEnvCfg) -> None:
   cfg.rewards["motion_global_root_pos"].weight = 3.0
   
 def use_residual_pd_targets(cfg: ManagerBasedRlEnvCfg) -> None:
-  scaling_factor = 3.
-  scale = {k: v * scaling_factor  for k, v in G1_ACTION_SCALE.items()}
-
   cfg.actions["joint_pos"] = MotionTrackingJointPositionActionCfg(
     entity_name="robot",
     actuator_names=(".*",),
-    scale=scale,
+    scale=G1_ACTION_SCALE,
     command_name="motion",
   )
 
