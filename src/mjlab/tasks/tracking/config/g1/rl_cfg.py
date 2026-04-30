@@ -60,6 +60,9 @@ def unitree_g1_tracking_zopo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       activation="elu",
       obs_normalization=True,
       distribution_cfg=None,
+      rnn_type="lstm",
+      class_name="mjlab.alg.models.rnn_models.RNNModel",
+      rnn_hidden_dim=64,
     ),
     critic={}, # type: ignore
     obs_groups= {"actor": ("actor",)},
@@ -75,7 +78,6 @@ def unitree_g1_tracking_zopo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       antithetic=True,
       optimizer="adamw",
       class_name="mjlab.alg.zopo.ZOPO",
-      last_activation=None
     ), # type: ignore
     experiment_name="g1_tracking",
     save_interval=20,

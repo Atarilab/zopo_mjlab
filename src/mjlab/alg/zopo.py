@@ -1,14 +1,18 @@
 import math
 import torch
 import torch.nn as nn
+from torch.nn import LSTMCell
 from torch.func import vmap, functional_call
 from torch.distributions import Normal
 from tensordict import TensorDict
+from typing import Iterator, Tuple
+from itertools import chain
 
 from rsl_rl.env import VecEnv
-from rsl_rl.models import MLPModel
+from rsl_rl.models import MLPModel, RNNModel
 from rsl_rl.utils import resolve_callable, resolve_obs_groups, resolve_optimizer, resolve_nn_activation
 
+from .models.rnn_models import FunctionalLSTM
 from .storage import Storage
 
 # Force new API, avoids PyTorch/inductor conflict
@@ -18,12 +22,12 @@ torch.set_float32_matmul_precision("high")
 print("Matmul TF32 status:", torch.get_float32_matmul_precision())
 
 class ZOPO():
-    actor: MLPModel
+    actor: MLPModel | RNNModel
     """The actor model."""
 
     def __init__(
         self,
-        actor: MLPModel,
+        actor: MLPModel | RNNModel,
         storage: Storage,
         gamma: float = 0.99,
         sigma: float = 0.01,
@@ -88,39 +92,79 @@ class ZOPO():
         self.actor = actor.to(self.device).to(dtype)
         self._init_weights()
 
-        def p_forward(p, obs):
+        # Define vmap for MLP
+        def mlp_forward(p, obs):
             return functional_call(self.actor.mlp, p, (obs,))
-        
-        self.vmap_actor = torch.compile(vmap(p_forward, in_dims=(0, 0)))
+        self.vmap_mlp = torch.compile(vmap(mlp_forward, in_dims=(0, 0)))
 
         # Init samples
         self.params_samples = {
             k: torch.empty((self.N, *v.shape), device=self.device, dtype=self.dtype)
             for k, v in self.actor.mlp.named_parameters()
         }
-        self._log_sig = {
-            k: f"{k.replace('.', '')}_log_sigma" for k, _ in self.actor.mlp.named_parameters()
-        }
-
-        # Create the optimizer
+        self.mlp_params_name = [k for k, _ in self.actor.mlp.named_parameters()]
+        # Sigma parameters
         if self.learn_sigma:
+            self._log_sig = {
+                k: f"{k.replace('.', '')}_log_sigma" for k, _ in self.actor.mlp.named_parameters()
+            }
             self.params_log_sigma = torch.nn.ParameterDict({
                 self._log_sig[k]: torch.nn.Parameter(torch.tensor(self.sigma, device=self.device).log())
                 for k, _ in self.actor.mlp.named_parameters()
             })
-            self.optimizer = resolve_optimizer(optimizer)([
-                {"params": self.actor.mlp.parameters(), "lr": lr, "weight_decay": weight_decay},
-                {"params": self.params_log_sigma.parameters(), "lr": lr_sigma, "weight_decay": 0.0},
-            ], maximize=True) # type: ignore
-        else:
-            self.optimizer : torch.optim.Optimizer = resolve_optimizer(optimizer)(
-                self.actor.mlp.parameters(), lr=lr, maximize=True, weight_decay=weight_decay
-            )  # type: ignore
 
+        # Define vmap for RNN, if exists
+        self.with_rnn = hasattr(self.actor, "rnn")
+        self.rnn_params_name = []
+        if self.with_rnn:
+            lstm : FunctionalLSTM = self.actor.rnn.rnn # type: ignore
+
+            def lstm_forward(p, x, state):
+                return functional_call(lstm, p, (x, state))
+            self.vmap_rnn = torch.compile(vmap(lstm_forward, in_dims=(0, 0, 0)))
+
+            # Init samples
+            self.rnn_params_name = [k for k, _ in lstm.named_parameters()]
+            self.params_samples.update({
+                k: torch.empty((self.N, *v.shape), device=self.device, dtype=self.dtype)
+                for k, v in lstm.named_parameters()
+            })
+            # Sigma parameters
+            if self.learn_sigma:
+                self._log_sig.update({
+                    k: f"{k.replace('.', '')}_log_sigma" for k, _ in lstm.named_parameters()
+                })
+                self.params_log_sigma.update(torch.nn.ParameterDict({
+                    self._log_sig[k]: torch.nn.Parameter(torch.tensor(self.sigma, device=self.device).log())
+                    for k, _ in lstm.named_parameters()
+                }))
+        
+        # Create optimizer
+        optim_params = [
+            {"params": self.actor.mlp.parameters(), "lr": lr, "weight_decay": weight_decay},
+        ]
+        if self.with_rnn:
+            lstm : FunctionalLSTM = self.actor.rnn.rnn # type: ignore
+            optim_params.append(
+                {"params": lstm.parameters(), "lr": lr, "weight_decay": weight_decay},
+            )
+        if self.learn_sigma:
+            optim_params.append(
+                {"params": self.params_log_sigma.parameters(), "lr": lr_sigma, "weight_decay": 0.0}
+            )
+        self.optimizer = resolve_optimizer(optimizer)( # type: ignore
+            optim_params,
+            maximize=True,
+            )
+        
+        self.all_params_name = self.mlp_params_name + self.rnn_params_name
         self.sample_params()
 
     def _init_weights(self) -> None:
-        layers = list(self.actor.mlp)
+        layers = [
+            m for _, m in
+            self.actor.mlp.named_modules(remove_duplicate=False)
+        ]
 
         for i, layer in enumerate(layers):
             if isinstance(layer, nn.Linear):
@@ -140,14 +184,39 @@ class ZOPO():
                 nn.init.xavier_uniform_(layer.weight, gain=gain)
                 nn.init.zeros_(layer.bias)
 
+    def get_latent(self, obs: TensorDict) -> torch.Tensor:
+        """Overrides RSL-RL logic to handle vmap and RNN."""
+        # Select and concatenate observations
+        obs_list = [obs[obs_group] for obs_group in self.actor.obs_groups]
+        latent = torch.cat(obs_list, dim=-1)
+        # Normalize observations
+        latent = self.actor.obs_normalizer(latent)
+
+        if self.with_rnn:
+            self.actor: RNNModel
+            # Pass through RNN and update hidden state
+            if self.actor.rnn.hidden_state is None:
+                lstm : FunctionalLSTM = self.actor.rnn.rnn # type: ignore
+                self.actor.rnn.hidden_state = lstm.init_state(latent.shape[0], device=obs.device, dtype=obs.dtype)
+
+            self.actor.rnn.hidden_state = self.vmap_rnn(
+                {k: self.params_samples[k] for k in self.rnn_params_name},
+                latent,
+                self.actor.rnn.hidden_state,
+                )[1]
+            return torch.concatenate((self.actor.rnn.hidden_state[0], latent), dim=-1)
+
+        return latent
+    
     @torch.no_grad()
     def act(self, obs: TensorDict) -> torch.Tensor:
         # Compute the actions and values
         if self.actor.training:
-            # Get MLP input latent (normalized)
-            latent = self.actor.get_latent(obs, None, None)
+            # Get obs processed
+            latent = self.get_latent(obs)
             # vmap MLP forward pass
-            return self.vmap_actor(self.params_samples, latent)
+            action = self.vmap_mlp({k: self.params_samples[k] for k in self.mlp_params_name}, latent).squeeze()
+            return action
         else:
             # Use the standard forward actor
             return self.actor(obs, stochastic_output=False)
@@ -166,11 +235,7 @@ class ZOPO():
         cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
 
         # Initialize the policy
-        actor: MLPModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
-        last_activation_str = cfg["algorithm"].pop("last_activation")
-        if last_activation_str is not None:
-            last_activation = resolve_nn_activation(last_activation_str)
-            actor.mlp.add_module("last_activation", last_activation)
+        actor: MLPModel | RNNModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
         print(f"Actor Model: {actor}")
 
         # Initialize the storage
@@ -208,7 +273,7 @@ class ZOPO():
         pass
 
     def sample_params(self):
-        for k, p in self.actor.mlp.named_parameters():
+        for k, p in self.all_parameters():
             if self.learn_sigma:
                 sigma = torch.exp(self.params_log_sigma[self._log_sig[k]]).item()
             else:
@@ -222,11 +287,17 @@ class ZOPO():
                 self.params_samples[k][self.N_half:].copy_(-self.params_samples[k][:self.N_half])
                 self.params_samples[k].add_(p)
 
+    def all_parameters(self) -> Iterator[tuple[str, nn.Parameter]]:
+        if self.with_rnn:
+            return chain(self.actor.mlp.named_parameters(), self.actor.rnn.rnn.named_parameters())
+        else:
+            return self.actor.mlp.named_parameters()
+        
     def set_grad(self, returns: torch.Tensor) -> float:
         total_elems = 0.
         l2_sq_params = 0.
 
-        for k, p in self.actor.mlp.named_parameters():
+        for k, p in self.all_parameters():
             # Recover epsilon WITHOUT modifying buffer
             self.params_samples[k].sub_(p.unsqueeze(0))
             r = returns.view(-1, *([1] * p.ndim))
@@ -277,12 +348,12 @@ class ZOPO():
         # Compute gradients
         param_norm2 = self.set_grad(r)
         # Clip grads
-        grads = [p.grad for p in self.actor.mlp.parameters() if p.grad is not None]
+        grads = [p.grad for p in self.actor.parameters() if p.grad is not None]
         total_norm = torch.nn.utils.get_total_norm(grads)
 
         if self.max_grad_norm > 0.:
             torch.nn.utils.clip_grads_with_norm_(
-                self.actor.mlp.parameters(),
+                self.actor.parameters(),
                 self.max_grad_norm,
                 total_norm
             )
@@ -294,6 +365,7 @@ class ZOPO():
         self.sample_params()
         # Clear storage
         self.storage.clear()
+        self.actor.reset(torch.ones(self.N, dtype=torch.long, device=self.device))
 
         info_dict = {
             "grad_total_norm": total_norm.item(),
@@ -307,7 +379,7 @@ class ZOPO():
             for p in self.params_log_sigma.values():
                 p.data.clamp_(-7.0, -3.0)
             sigma_dict = {
-                f"log_sigma/{k}": v.item()
+                f"sigma/{k}": v.exp().item()
                 for k, v in self.params_log_sigma.items()
             }
             info_dict.update(sigma_dict)

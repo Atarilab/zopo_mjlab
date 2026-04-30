@@ -25,13 +25,16 @@ def no_randomization(cfg: ManagerBasedRlEnvCfg) -> None:
 def improved_rewards(cfg: ManagerBasedRlEnvCfg) -> None:
   """Modify reward terms inplace."""
   cfg.rewards["self_collisions"].weight = -1.0
-  cfg.rewards["motion_global_root_pos"].weight = 4.0
+  cfg.rewards["motion_global_root_pos"].weight = 3.0
   
 def use_residual_pd_targets(cfg: ManagerBasedRlEnvCfg) -> None:
+  scaling_factor = 3.
+  scale = {k: v * scaling_factor  for k, v in G1_ACTION_SCALE.items()}
+
   cfg.actions["joint_pos"] = MotionTrackingJointPositionActionCfg(
     entity_name="robot",
     actuator_names=(".*",),
-    scale=G1_ACTION_SCALE,
+    scale=scale,
     command_name="motion",
   )
 
@@ -40,9 +43,10 @@ def no_critic(cfg: ManagerBasedRlEnvCfg) -> None:
 
 def relaxed_termination(cfg: ManagerBasedRlEnvCfg) -> None:
   cfg.terminations["anchor_ori"].params["threshold"] = 0.8
-  cfg.terminations["anchor_pos"].params["threshold"] = 0.4
-  cfg.terminations["ee_body_pos"].func = mdp.bad_motion_body_pos
-  cfg.terminations["ee_body_pos"].params["threshold"] = 0.4
+  cfg.terminations["anchor_pos"].func = mdp.bad_anchor_pos
+  cfg.terminations["anchor_pos"].params["threshold"] = 0.3
+  # cfg.terminations["ee_body_pos"].func = mdp.bad_motion_body_pos_z_only
+  # cfg.terminations["ee_body_pos"].params["threshold"] = 0.3
 
 def no_termination(cfg: ManagerBasedRlEnvCfg) -> None:
   cfg.terminations.pop("anchor_ori")
@@ -152,7 +156,7 @@ def unitree_g1_flat_tracking_env_cfg(
     motion_cmd.sampling_mode = "start"
 
   cfg.scene.env_spacing = 0.
-  improved_rewards(cfg)
+  # improved_rewards(cfg)
   relaxed_termination(cfg)
   # no_termination(cfg)
   if paired_domain_rand:

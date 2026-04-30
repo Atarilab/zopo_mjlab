@@ -13,6 +13,7 @@ from mjlab.rl.exporter_utils import (
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.tracking.mdp import MotionCommand
+from mjlab.alg.models.rnn_models import RNNModel, _OnnxRNNModel
 
 
 class _OnnxMotionModel(nn.Module):
@@ -21,6 +22,7 @@ class _OnnxMotionModel(nn.Module):
   def __init__(self, actor, motion):
     super().__init__()
     self.policy = actor.as_onnx(verbose=False)
+    self._is_rnn = isinstance(self.policy, _OnnxRNNModel)
     self.register_buffer("joint_pos", motion.joint_pos.to("cpu"))
     self.register_buffer("joint_vel", motion.joint_vel.to("cpu"))
     self.register_buffer("body_pos_w", motion.body_pos_w.to("cpu"))
@@ -43,6 +45,34 @@ class _OnnxMotionModel(nn.Module):
       self.body_ang_vel_w[time_step_clamped],  # type: ignore[index]
     )
 
+class _OnnxMotionRNNModel(_OnnxMotionModel):
+  """ONNX-exportable model that wraps the policy and bundles motion reference data."""
+
+  def __init__(self, actor : RNNModel, motion):
+    super().__init__(actor, motion)
+    self.hidden_state = None
+    self.hidden_size = actor.rnn.rnn.hidden_size
+
+  def init_state(self, obs: torch.Tensor):
+    B = obs.shape[0]
+    self.hidden_state = (
+      torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype),
+      torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype),
+    )
+
+  def forward(self, x, time_step):
+    time_step_clamped = torch.clamp(
+      time_step.long().squeeze(-1), max=self.time_step_total - 1
+    )
+    return (
+      self.policy(x),
+      self.joint_pos[time_step_clamped],  # type: ignore[index]
+      self.joint_vel[time_step_clamped],  # type: ignore[index]
+      self.body_pos_w[time_step_clamped],  # type: ignore[index]
+      self.body_quat_w[time_step_clamped],  # type: ignore[index]
+      self.body_lin_vel_w[time_step_clamped],  # type: ignore[index]
+      self.body_ang_vel_w[time_step_clamped],  # type: ignore[index]
+    )
 
 class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   env: RslRlVecEnvWrapper
@@ -68,9 +98,14 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     model.eval()
     obs = torch.zeros(1, model.policy.input_size)
     time_step = torch.zeros(1, 1)
+    if isinstance(self.alg.get_policy(), RNNModel):
+      h_in = torch.zeros(1, self.alg.get_policy().rnn.rnn.hidden_size)
+      # args = (obs, time_step, h_in)
+    args = (obs, time_step)
+
     torch.onnx.export(
       model,
-      (obs, time_step),
+      args,
       os.path.join(path, filename),
       export_params=True,
       opset_version=18,

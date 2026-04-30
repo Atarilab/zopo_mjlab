@@ -34,6 +34,7 @@ register_mjlab_task(
   play_env_cfg=unitree_g1_flat_tracking_env_cfg(
     with_critic=False,
     randomize=False,
+    paired_domain_rand=True,
     residual_action=True,
     play=True
   ),

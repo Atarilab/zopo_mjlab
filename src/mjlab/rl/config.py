@@ -62,8 +62,6 @@ class ZOPOAlgorithmCfg():
     normalize_returns: bool = True
     """Normalize returns (devide by std)."""
     class_name: str = "alg.zopo.ZOPO"
-    """Algorithm class name resolved by RSL-RL."""
-    last_activation: str | None = "tanh"
     """Last NN activate."""
     rnd_cfg: dict | None = None
     """For retro compatibility"""
