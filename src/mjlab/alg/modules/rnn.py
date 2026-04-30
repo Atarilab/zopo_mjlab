@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
+from typing import Tuple, Union
+
 import torch
 import torch.nn as nn
-from typing import Union, Tuple
-
 from rsl_rl.utils import unpad_trajectories
 
 

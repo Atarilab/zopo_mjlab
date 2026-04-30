@@ -1,7 +1,7 @@
 import os
+import time
 from pathlib import Path
 
-import time
 import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner

@@ -1,18 +1,15 @@
-import math
+from itertools import chain
+from typing import Iterator
+
 import torch
 import torch.nn as nn
-from torch.nn import LSTMCell
-from torch.func import vmap, functional_call
-from torch.distributions import Normal
-from tensordict import TensorDict
-from typing import Iterator, Tuple
-from itertools import chain
-
 from rsl_rl.env import VecEnv
 from rsl_rl.models import MLPModel, RNNModel
-from rsl_rl.utils import resolve_callable, resolve_obs_groups, resolve_optimizer, resolve_nn_activation
+from rsl_rl.utils import resolve_callable, resolve_obs_groups, resolve_optimizer
+from tensordict import TensorDict
+from torch.func import functional_call, vmap
 
-from .models.rnn_models import FunctionalLSTM
+from .modules.rnn import FunctionalLSTM
 from .storage import Storage
 
 # Force new API, avoids PyTorch/inductor conflict
@@ -21,13 +18,15 @@ torch.set_float32_matmul_precision("high")
 # Optional: check current status
 print("Matmul TF32 status:", torch.get_float32_matmul_precision())
 
+Model = MLPModel | RNNModel
+
 class ZOPO():
-    actor: MLPModel | RNNModel
+    # actor: Model
     """The actor model."""
 
     def __init__(
         self,
-        actor: MLPModel | RNNModel,
+        actor: Model,
         storage: Storage,
         gamma: float = 0.99,
         sigma: float = 0.01,
@@ -89,7 +88,7 @@ class ZOPO():
             self.gpu_world_size = 1
 
         # ZOPO components
-        self.actor = actor.to(self.device).to(dtype)
+        self.actor = actor.to(self.device).to(dtype) # type: ignore
         self._init_weights()
 
         # Define vmap for MLP
@@ -235,7 +234,7 @@ class ZOPO():
         cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
 
         # Initialize the policy
-        actor: MLPModel | RNNModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
+        actor: Model = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
         print(f"Actor Model: {actor}")
 
         # Initialize the storage

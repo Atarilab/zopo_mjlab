@@ -2,18 +2,17 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-
-
 from __future__ import annotations
 
 import copy
+
 import torch
 import torch.nn as nn
+from rsl_rl.models.mlp_model import MLPModel
 from tensordict import TensorDict
 
-from rsl_rl.models.mlp_model import MLPModel
+from ..modules.rnn import RNN, FunctionalLSTM, HiddenState
 
-from mjlab.alg.modules.rnn import RNN, HiddenState, FunctionalLSTM
 
 class RNNModel(MLPModel):
     """RNN-based neural model.
@@ -80,8 +79,9 @@ class RNNModel(MLPModel):
         # Extract and concatenate observation groups and normalize
         latent = super().get_latent(obs)
         # Pass through the RNN
-        latent = self.rnn(latent, masks, hidden_state).squeeze(0)
-        return latent
+        h = self.rnn(latent, masks, hidden_state).squeeze(0)
+        # Concatenate with obs
+        return torch.concatenate((h, latent), dim=-1)
 
     def reset(self, dones: torch.Tensor | None = None, hidden_state: HiddenState = None) -> None:
         """Reset the recurrent hidden state of the RNN."""
@@ -210,18 +210,17 @@ class _OnnxRNNModel(nn.Module):
         self, obs: torch.Tensor, h_in: torch.Tensor, c_in: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Run deterministic inference for ONNX export."""
-        x = self.obs_normalizer(obs)
+        latent = self.obs_normalizer(obs)
 
         if self.rnn_type == "lstm":
-            x, (h, c) = self.rnn(x.unsqueeze(0), (h_in, c_in))
-            x = x.squeeze(0)
-            out = self.mlp(x)
+            _, (h, c) = self.rnn(latent, (h_in, c_in))
+            out = self.mlp(torch.concatenate((h, latent), dim=-1))
             out = self.deterministic_output(out)
             return out, h, c
         else:
-            x, h = self.rnn(x.unsqueeze(0), h_in)
-            x = x.squeeze(0)
-            out = self.mlp(x)
+            latent, h = self.rnn(latent.unsqueeze(0), h_in)
+            latent = latent.squeeze(0)
+            out = self.mlp(latent)
             out = self.deterministic_output(out)
             return out, h, None
 

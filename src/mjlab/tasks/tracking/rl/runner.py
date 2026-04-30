@@ -6,6 +6,7 @@ import wandb
 from rsl_rl.env.vec_env import VecEnv
 from torch import nn
 
+from mjlab.alg.models.rnn_models import RNNModel
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import (
   attach_metadata_to_onnx,
@@ -13,7 +14,6 @@ from mjlab.rl.exporter_utils import (
 )
 from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.tasks.tracking.mdp import MotionCommand
-from mjlab.alg.models.rnn_models import RNNModel, _OnnxRNNModel
 
 
 class _OnnxMotionModel(nn.Module):
@@ -22,7 +22,6 @@ class _OnnxMotionModel(nn.Module):
   def __init__(self, actor, motion):
     super().__init__()
     self.policy = actor.as_onnx(verbose=False)
-    self._is_rnn = isinstance(self.policy, _OnnxRNNModel)
     self.register_buffer("joint_pos", motion.joint_pos.to("cpu"))
     self.register_buffer("joint_vel", motion.joint_vel.to("cpu"))
     self.register_buffer("body_pos_w", motion.body_pos_w.to("cpu"))
@@ -50,22 +49,21 @@ class _OnnxMotionRNNModel(_OnnxMotionModel):
 
   def __init__(self, actor : RNNModel, motion):
     super().__init__(actor, motion)
-    self.hidden_state = None
+    self._h, self._c = None, None
     self.hidden_size = actor.rnn.rnn.hidden_size
 
   def init_state(self, obs: torch.Tensor):
     B = obs.shape[0]
-    self.hidden_state = (
-      torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype),
-      torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype),
-    )
+    self._h = torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype)
+    self._c = torch.zeros(B, self.hidden_size, device=obs.device, dtype=obs.dtype)
 
   def forward(self, x, time_step):
     time_step_clamped = torch.clamp(
       time_step.long().squeeze(-1), max=self.time_step_total - 1
     )
+    action, self._h, self._c = self.policy(x, self._h, self._c) 
     return (
-      self.policy(x),
+      action,
       self.joint_pos[time_step_clamped],  # type: ignore[index]
       self.joint_vel[time_step_clamped],  # type: ignore[index]
       self.body_pos_w[time_step_clamped],  # type: ignore[index]
@@ -93,19 +91,21 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
   ) -> None:
     os.makedirs(path, exist_ok=True)
     cmd = cast(MotionCommand, self.env.unwrapped.command_manager.get_term("motion"))
-    model = _OnnxMotionModel(self.alg.get_policy(), cmd.motion)
-    model.to("cpu")
-    model.eval()
-    obs = torch.zeros(1, model.policy.input_size)
     time_step = torch.zeros(1, 1)
     if isinstance(self.alg.get_policy(), RNNModel):
-      h_in = torch.zeros(1, self.alg.get_policy().rnn.rnn.hidden_size)
-      # args = (obs, time_step, h_in)
-    args = (obs, time_step)
+      model = _OnnxMotionRNNModel(self.alg.get_policy(), cmd.motion) # type: ignore
+      obs = torch.zeros(1, model.policy.input_size)
+      model.init_state(obs)
+    else:
+      model = _OnnxMotionModel(self.alg.get_policy(), cmd.motion)
+      obs = torch.zeros(1, model.policy.input_size)
+    model.to("cpu")
+    model.eval()
 
+      
     torch.onnx.export(
       model,
-      args,
+      (obs, time_step),
       os.path.join(path, filename),
       export_params=True,
       opset_version=18,
